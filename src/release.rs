@@ -9,6 +9,7 @@ use std::fs::OpenOptions;
 #[allow(unused)]
 #[derive(Deserialize, Clone, Debug)]
 struct ReleasesAssets {
+    url: String,
     name: String,
     browser_download_url: String,
 }
@@ -29,6 +30,28 @@ impl ReleasesData {
     }
 
     async fn platforms(&self) -> serde_json::Value {
+        let mut headers = header::HeaderMap::new();
+        let cargo_version = env!("CARGO_PKG_VERSION");
+        let user_agent = format!("RustRuntime/{cargo_version}");
+        headers.insert(
+            "User-Agent",
+            header::HeaderValue::from_str(&user_agent).unwrap(),
+        );
+        headers.insert(
+            "Accept",
+            header::HeaderValue::from_static("application/octet-stream"),
+        );
+        if let Ok(token) = env::var("TOKEN") {
+            headers.insert(
+                "Authorization",
+                header::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+            );
+        };
+
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap();
         let mut value = json!({});
         let map = hashmap! {
             "x64_zh-TW.msi.zip" => "windows-x86_64",
@@ -43,8 +66,7 @@ impl ReleasesData {
             if let Some(asset) = self.assets.iter().find(|a| re.is_match(&a.name)) {
                 let url = &asset.browser_download_url;
                 if let Some(asset) = self.assets.iter().find(|a| sig_re.is_match(&a.name)) {
-                    let sig_url = &asset.browser_download_url;
-                    match reqwest::get(sig_url).await {
+                    match client.get(&asset.url).send().await {
                         Ok(response) => match response.text().await {
                             Ok(signature) => value[v] = platform::new(&signature, url),
                             Err(_) => value[v] = platform::new("", url),
@@ -101,7 +123,7 @@ pub async fn get_release_latest() -> Result<ReleasesData, Box<dyn std::error::Er
     }
 
     let res = client
-        .get(url)
+        .get(&url)
         .send()
         .await?
         .json::<Vec<ReleasesData>>()
